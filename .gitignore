@@ -2,3 +2,4 @@
 
 # local Claude Code tooling (quality-gate marker)
 .claude/
+ds/audit/
