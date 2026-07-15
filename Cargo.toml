@@ -1,0 +1,22 @@
+[package]
+name = "statusline"
+version = "0.1.0"
+edition = "2024"
+description = "Fast, harness-independent terminal statusline (Claude Code / Cursor CLI / generic shell)"
+license = "MIT"
+repository = "https://github.com/sungurerdim/statusline"
+readme = "README.md"
+keywords = ["statusline", "prompt", "claude-code", "cli", "git"]
+categories = ["command-line-utilities"]
+
+[dependencies]
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+toml = "1.1.3"
+
+[profile.release]
+opt-level = "z"     # optimize for size
+lto = true          # link-time optimization
+codegen-units = 1   # better optimization, smaller binary
+strip = true        # strip symbols
+panic = "abort"     # no unwinding tables -> smaller, faster startup

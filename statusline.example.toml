@@ -1,0 +1,63 @@
+# statusline configuration — every option, with its default.
+#
+# WHERE THIS FILE LIVES (first one found wins, no merging):
+#   1. ./.statusline.toml                     (per-project, checked into a repo)
+#   2. ~/.claude/statusline.toml              (or $CLAUDE_CONFIG_DIR/statusline.toml)
+#   3. ~/.config/statusline/config.toml       (or $XDG_CONFIG_HOME/statusline/config.toml)
+#
+# Every key below is OPTIONAL and shown set to its built-in default — delete a
+# line to keep the default, or change it. Unknown keys are rejected (typo guard).
+# A broken config never breaks the bar: it warns on stderr and falls back to
+# defaults. Environment variables (NO_COLOR, FORCE_COLOR, STATUSLINE_LAYOUT,
+# STATUSLINE_GLYPHS) still apply and override the matching value here.
+
+# ── Layout ───────────────────────────────────────────────────────────────────
+# "multi"  = aligned two-row block (default)
+# "single" = one dense line (saves vertical space)
+layout = "multi"
+
+# ── Glyphs / icons ───────────────────────────────────────────────────────────
+# The tool auto-manages icons based on your terminal + locale:
+# "auto"    = universal Unicode symbols (▲ ◉ ◔ 🔥 · ✓ ↻) — render in almost any
+#             modern font; downgrades to ASCII on non-UTF-8 / dumb terminals.
+# "unicode" = force the universal Unicode set.
+# "nerd"    = Nerd-Font icons (needs a patched font, e.g. MesloLGS NF).
+# "ascii"   = pure ASCII (^ v ok ~ | +/-) — safe anywhere.
+glyphs = "auto"
+
+# ── Color ────────────────────────────────────────────────────────────────────
+# "auto"      = detect from COLORTERM/TERM (truecolor → 256 → 16), honor NO_COLOR.
+# "truecolor" | "256" | "16" = force a level.  "off" = no color.
+color = "auto"
+
+# ── Burn rate ($/hr) ─────────────────────────────────────────────────────────
+# How the money-per-hour figure is computed:
+# "api"  = per hour of ACTIVE API/compute time — excludes idle & thinking gaps,
+#          the most realistic rate (default). Falls back to wall time if the
+#          harness doesn't report API time.
+# "wall" = per hour of wall-clock session time (diluted by idle).
+# "off"  = hide the burn rate (still shows total cost).
+burn = "api"
+
+# ── Git ──────────────────────────────────────────────────────────────────────
+[git]
+# Untracked-file scanning — the main cost on huge repos:
+# "normal" = count untracked files (default)
+# "no"     = skip the untracked scan (fastest; hides untracked count)
+# "all"    = list every untracked file (slowest)
+untracked = "normal"
+
+# Show the latest release tag (git describe). Off by default — it costs an extra
+# git call. Turn on if you want the tag in the bar.
+tags = false
+
+# ── Segments (turn any on/off) ───────────────────────────────────────────────
+[segments]
+git     = true   # repo:branch, ahead/behind, conflicts, stash, synced ✓
+model   = true   # active model name (+ reasoning effort when not "medium")
+context = true   # context window: tokens + % used (color-coded 70/90)
+lines   = true   # uncommitted line diff (+added −removed vs HEAD; clears on commit)
+changes = true   # working-tree file counts (~modified +added −deleted)
+cost    = true   # session cost $ + burn rate
+block   = true   # 5-hour rate-limit window: % used + reset countdown
+week    = true   # 7-day rate-limit window: % used + reset countdown
