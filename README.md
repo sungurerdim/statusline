@@ -1,5 +1,7 @@
 # statusline
 
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 A fast, harness-independent terminal statusline — one small binary that renders a
 rich, color-coded status block from whatever your AI coding harness (Claude Code,
 Cursor CLI, …) sends on stdin, plus live git state.
