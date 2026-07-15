@@ -171,6 +171,7 @@ pub struct Glyphs {
     pub modified: &'static str,
     pub conflict: &'static str,
     pub stash: &'static str,
+    pub tag: &'static str,
     pub sep: &'static str,
 }
 
@@ -194,6 +195,7 @@ impl Glyphs {
                 modified: "~",
                 conflict: "!",
                 stash: "*",
+                tag: "@",
                 sep: "|",
             },
             GlyphMode::Unicode => Glyphs {
@@ -213,6 +215,7 @@ impl Glyphs {
                 modified: "~",
                 conflict: "\u{26a0}", // ⚠
                 stash: "\u{2691}",    // ⚑
+                tag: "\u{1f3f7}",     // 🏷 (widely supported emoji)
                 sep: "\u{00b7}",      // ·
             },
             GlyphMode::Nerd => Glyphs {
@@ -232,6 +235,7 @@ impl Glyphs {
                 modified: "\u{f040}", // pencil
                 conflict: "\u{f421}", // git-merge conflict
                 stash: "\u{f01c}",    // inbox
+                tag: "\u{f02b}",      // tag
                 sep: "\u{00b7}",      // ·
             },
         }
@@ -305,5 +309,123 @@ mod tests {
         assert_eq!(g.ahead, "^");
         assert_eq!(g.sep, "|");
         assert!(g.branch.is_ascii());
+    }
+
+    // ---- env-driven detection (NO_COLOR / FORCE_COLOR / STATUSLINE_GLYPHS) ---
+    //
+    // Process env is global, so these tests serialize on ENV_LOCK and save/
+    // restore every var they touch — without that, concurrent test threads
+    // racing on the same env vars would flake unpredictably.
+
+    use std::sync::Mutex;
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    const ENV_VARS: &[&str] = &[
+        "FORCE_COLOR",
+        "NO_COLOR",
+        "TERM",
+        "COLORTERM",
+        "STATUSLINE_GLYPHS",
+        "LC_ALL",
+        "LC_CTYPE",
+        "LANG",
+    ];
+
+    /// Run `f` with exactly `vars` set (everything else in [`ENV_VARS`]
+    /// removed), then restore the prior environment — guarded by [`ENV_LOCK`]
+    /// so no other env-mutating test can interleave.
+    fn with_env<F: FnOnce()>(vars: &[(&str, &str)], f: F) {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved: Vec<(&str, Option<String>)> =
+            ENV_VARS.iter().map(|&k| (k, env::var(k).ok())).collect();
+        for &k in ENV_VARS {
+            unsafe { env::remove_var(k) };
+        }
+        for &(k, v) in vars {
+            unsafe { env::set_var(k, v) };
+        }
+        f();
+        for (k, v) in saved {
+            match v {
+                Some(v) => unsafe { env::set_var(k, v) },
+                None => unsafe { env::remove_var(k) },
+            }
+        }
+    }
+
+    #[test]
+    fn no_color_disables_color() {
+        with_env(&[("NO_COLOR", "1")], || {
+            assert_eq!(detect_color_mode(), ColorMode::None);
+        });
+    }
+
+    #[test]
+    fn force_color_zero_wins_over_colorterm() {
+        with_env(&[("FORCE_COLOR", "0"), ("COLORTERM", "truecolor")], || {
+            assert_eq!(detect_color_mode(), ColorMode::None);
+        });
+    }
+
+    #[test]
+    fn force_color_wins_over_no_color() {
+        with_env(&[("FORCE_COLOR", "1"), ("NO_COLOR", "1")], || {
+            assert_ne!(detect_color_mode(), ColorMode::None);
+        });
+    }
+
+    #[test]
+    fn dumb_term_disables_color() {
+        with_env(&[("TERM", "dumb")], || {
+            assert_eq!(detect_color_mode(), ColorMode::None);
+        });
+    }
+
+    #[test]
+    fn colorterm_truecolor_wins() {
+        with_env(&[("COLORTERM", "truecolor")], || {
+            assert_eq!(detect_color_mode(), ColorMode::Truecolor);
+        });
+    }
+
+    #[test]
+    fn term_256_selects_ansi256() {
+        with_env(&[("TERM", "xterm-256color")], || {
+            assert_eq!(detect_color_mode(), ColorMode::Ansi256);
+        });
+    }
+
+    #[test]
+    fn statusline_glyphs_overrides_detection() {
+        with_env(
+            &[("STATUSLINE_GLYPHS", "ascii"), ("LANG", "en_US.UTF-8")],
+            || {
+                assert_eq!(detect_glyph_mode(), GlyphMode::Ascii);
+            },
+        );
+        with_env(&[("STATUSLINE_GLYPHS", "nerd")], || {
+            assert_eq!(detect_glyph_mode(), GlyphMode::Nerd);
+        });
+    }
+
+    #[test]
+    fn dumb_term_forces_ascii_glyphs() {
+        with_env(&[("TERM", "dumb"), ("LANG", "en_US.UTF-8")], || {
+            assert_eq!(detect_glyph_mode(), GlyphMode::Ascii);
+        });
+    }
+
+    #[test]
+    fn non_utf8_locale_forces_ascii_glyphs() {
+        with_env(&[("LANG", "C")], || {
+            assert_eq!(detect_glyph_mode(), GlyphMode::Ascii);
+        });
+    }
+
+    #[test]
+    fn utf8_locale_selects_unicode_glyphs() {
+        with_env(&[("LANG", "en_US.UTF-8")], || {
+            assert_eq!(detect_glyph_mode(), GlyphMode::Unicode);
+        });
     }
 }

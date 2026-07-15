@@ -152,11 +152,8 @@ pub fn extract(v: &Value) -> StatusData {
         cwd,
         project_name,
         model_name,
-        harness_version: str_at(v, &[&["version"], &["harness_version"]]),
         effort_level: str_at(v, &[&["effort", "level"], &["reasoning", "effort"]]),
-        output_style: str_at(v, &[&["output_style", "name"]]),
         context_tokens,
-        context_size,
         context_used_pct,
         cost_usd: f64_at(
             v,
@@ -232,7 +229,6 @@ mod tests {
         assert_eq!(d.project_name.as_deref(), Some("api-server"));
         // context derived from flat tokens.used / tokens.total
         assert_eq!(d.context_tokens, Some(50000));
-        assert_eq!(d.context_size, Some(200000));
         assert_eq!(d.context_used_pct, Some(25.0));
         assert_eq!(d.cost_usd, Some(1.5));
         assert!(d.five_hour.is_none()); // not provided → omitted, not wrong

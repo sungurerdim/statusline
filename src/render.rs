@@ -183,6 +183,10 @@ fn seg_git(d: &StatusData, ctx: &RenderCtx) -> Option<String> {
             false,
         ));
     }
+    if let Some(tag) = &git.tag {
+        s.push(' ');
+        s.push_str(&ctx.p(&format!("{}{tag}", ctx.glyphs.tag), Palette::GRAY, false));
+    }
     // Fully in sync with the remote: clean tree, nothing to push/pull, upstream
     // set. A positive "all good" marker, mirroring the commit/push-needed cues.
     let clean = !git.has_tracked_changes() && git.untracked == 0 && git.conflicts == 0;
@@ -513,5 +517,69 @@ mod tests {
             out.contains("1h29m") || out.contains("1h30m"),
             "countdown: {out}"
         );
+    }
+
+    #[test]
+    fn tag_renders_when_present() {
+        let d = StatusData {
+            git: Some(GitInfo {
+                branch: Some("main".into()),
+                repo_name: Some("statusline".into()),
+                tag: Some("v0.1.0".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let out = render(&d, &ascii_ctx(Layout::Multi));
+        assert!(out.contains("@v0.1.0"), "{out}");
+    }
+
+    /// Render-coverage guard (BP-010): every populated `StatusData`/`GitInfo`
+    /// field must surface somewhere in `render()` output. Catches the class of
+    /// bug where a field is parsed/computed but never wired into a segment
+    /// (see ds/audit/findings.md BP-001/BP-003/BP-004 history).
+    #[test]
+    fn every_populated_field_surfaces_in_output() {
+        let d = StatusData {
+            model_name: Some("Opus 4.8".into()),
+            effort_level: Some("high".into()),
+            context_tokens: Some(170_000),
+            context_used_pct: Some(17.0),
+            cost_usd: Some(0.42),
+            duration_ms: Some(4_980_000),
+            api_duration_ms: Some(2_000_000),
+            five_hour: Some(RateWindow {
+                used_pct: 68.0,
+                resets_at: None,
+            }),
+            seven_day: Some(RateWindow {
+                used_pct: 41.0,
+                resets_at: None,
+            }),
+            git: Some(GitInfo {
+                repo_name: Some("statusline".into()),
+                branch: Some("main".into()),
+                upstream: Some("origin/main".into()),
+                ahead: 1,
+                staged_mod: 1,
+                staged_add: 1,
+                wt_mod: 1,
+                untracked: 1,
+                conflicts: 1,
+                stashes: 1,
+                tag: Some("v0.1.0".into()),
+                diff_added: 1,
+                diff_removed: 1,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let out = render(&d, &ascii_ctx(Layout::Multi));
+        for expected in [
+            "main", "Opus 4.8", "high", "17%", "$0.42", "/h", "^1", "!1", "*1", "@v0.1.0", "+1",
+            "-1", "~2", "5h 68%", "7d 41%",
+        ] {
+            assert!(out.contains(expected), "missing {expected:?} in {out}");
+        }
     }
 }

@@ -5,8 +5,6 @@
 //! makes the tool harness-independent: adapters differ, this struct does not.
 
 /// Git working-tree summary (filled by the git engine, `None` outside a repo).
-// Scaffold: fields/helpers consumed by the render layer in Phase 3 (segments).
-#[allow(dead_code)]
 #[derive(Debug, Default, Clone)]
 pub struct GitInfo {
     pub repo_name: Option<String>,
@@ -32,7 +30,6 @@ pub struct GitInfo {
     pub diff_removed: u32,
 }
 
-#[allow(dead_code)] // totals consumed by the git segment in Phase 3
 impl GitInfo {
     /// Total modified across staged + unstaged.
     pub fn total_mod(&self) -> u32 {
@@ -43,9 +40,6 @@ impl GitInfo {
     }
     pub fn total_del(&self) -> u32 {
         self.staged_del + self.wt_del
-    }
-    pub fn total_ren(&self) -> u32 {
-        self.staged_ren
     }
 
     /// True when there are tracked (staged or unstaged) changes — the only case
@@ -63,8 +57,6 @@ impl GitInfo {
 }
 
 /// A rate-limit window (Claude Code `rate_limits.five_hour` / `seven_day`).
-// Scaffold: read by the rate-limit segment in Phase 3.
-#[allow(dead_code)]
 #[derive(Debug, Default, Clone)]
 pub struct RateWindow {
     pub used_pct: f64,
@@ -73,9 +65,6 @@ pub struct RateWindow {
 }
 
 /// Normalized, harness-agnostic status data consumed by all segments.
-// Scaffold: display fields are read by segments in Phase 3; `cwd`/`project_name`
-// /`git` are already used by the input+git pipeline.
-#[allow(dead_code)]
 #[derive(Debug, Default, Clone)]
 pub struct StatusData {
     // location
@@ -84,13 +73,10 @@ pub struct StatusData {
 
     // model / harness
     pub model_name: Option<String>,
-    pub harness_version: Option<String>,
     pub effort_level: Option<String>,
-    pub output_style: Option<String>,
 
     // context window (input-token based, matching Claude Code semantics)
     pub context_tokens: Option<u64>,
-    pub context_size: Option<u64>,
     pub context_used_pct: Option<f64>,
 
     // cost / effort

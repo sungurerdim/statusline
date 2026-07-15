@@ -19,9 +19,39 @@
 //! second `git describe` spawn.
 
 use crate::model::GitInfo;
-use std::process::Command;
+use std::process::{Command, Output, Stdio};
+use std::time::{Duration, Instant};
 
-/// Options controlling the git query (wired to config in Phase 4).
+/// Ceiling on any single `git` subprocess — well above the ~8ms typical
+/// render, but bounded so a hung/blocked process (lock contention, a repo on
+/// a stalled network mount, ...) can't stall the statusline indefinitely.
+const GIT_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Run `cmd`, killing it and returning `None` if it doesn't finish within
+/// [`GIT_TIMEOUT`]. Polls rather than spawning a watcher thread — simplest
+/// correct option for a bound this generous.
+fn run_with_timeout(cmd: &mut Command, timeout: Duration) -> Option<Output> {
+    let mut child = cmd
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .ok()?;
+    let start = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return child.wait_with_output().ok(),
+            Ok(None) if start.elapsed() >= timeout => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(5)),
+            Err(_) => return None,
+        }
+    }
+}
+
+/// Options controlling the git query (wired to config — see `Config::git_options`).
 #[derive(Debug, Clone, Copy)]
 pub struct GitOptions {
     /// `"normal"` (default), `"no"` (skip untracked scan — fastest), `"all"`.
@@ -30,8 +60,6 @@ pub struct GitOptions {
     pub tags: bool,
 }
 
-// `No`/`All` are selected via config in Phase 4; `Normal` is the default today.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UntrackedMode {
     No,
@@ -73,7 +101,7 @@ pub fn collect(cwd: Option<&str>, opts: GitOptions, repo_name: Option<&str>) -> 
     if let Some(dir) = cwd {
         cmd.current_dir(dir);
     }
-    let out = cmd.output().ok()?;
+    let out = run_with_timeout(&mut cmd, GIT_TIMEOUT)?;
     if !out.status.success() {
         return None; // not a repo, or git error
     }
@@ -103,7 +131,7 @@ fn diff_lines(cwd: Option<&str>) -> (u32, u32) {
     if let Some(dir) = cwd {
         cmd.current_dir(dir);
     }
-    let Ok(out) = cmd.output() else {
+    let Some(out) = run_with_timeout(&mut cmd, GIT_TIMEOUT) else {
         return (0, 0);
     };
     if !out.status.success() {
@@ -133,7 +161,7 @@ fn describe_tag(cwd: Option<&str>) -> Option<String> {
     if let Some(dir) = cwd {
         cmd.current_dir(dir);
     }
-    let out = cmd.output().ok()?;
+    let out = run_with_timeout(&mut cmd, GIT_TIMEOUT)?;
     if !out.status.success() {
         return None;
     }
@@ -284,5 +312,27 @@ u UU N... 1 2 3 100644 100644 100644 100644 ggg hhh iii conflict.rs
         assert!(!g.has_tracked_changes());
         g.wt_mod = 1;
         assert!(g.has_tracked_changes());
+    }
+
+    #[test]
+    fn run_with_timeout_kills_hung_process() {
+        let mut cmd = Command::new("sleep");
+        cmd.arg("5");
+        let start = Instant::now();
+        let out = run_with_timeout(&mut cmd, Duration::from_millis(100));
+        assert!(out.is_none(), "expected timeout to yield None");
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "should return promptly after killing the hung process"
+        );
+    }
+
+    #[test]
+    fn run_with_timeout_returns_output_when_fast() {
+        let mut cmd = Command::new("echo");
+        cmd.arg("hi");
+        let out = run_with_timeout(&mut cmd, Duration::from_secs(2)).unwrap();
+        assert!(out.status.success());
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "hi");
     }
 }
