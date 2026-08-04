@@ -45,21 +45,18 @@ pub enum ColorMode {
 /// look can be retuned in one place.
 pub struct Palette;
 
-// A curated, complete semantic token set. Some tones (info/user/text) are
-// reserved for config-selectable segments not enabled by default.
-#[allow(dead_code)]
+// One entry per role that a segment actually paints. Tones with no reader were
+// removed rather than parked behind `#[allow(dead_code)]` — the compiler's own
+// dead-code signal is worth more than a reserved palette slot.
 impl Palette {
     // Catppuccin Mocha hexes with sensible bright-ANSI fallbacks.
     pub const GREEN: Color = Color::new(0xa6, 0xe3, 0xa1, 92); // branch, additions
     pub const MAUVE: Color = Color::new(0xcb, 0xa6, 0xf7, 95); // model
-    pub const BLUE: Color = Color::new(0x89, 0xb4, 0xfa, 94); // info
     pub const SKY: Color = Color::new(0x89, 0xdc, 0xeb, 96); // context, accent
     pub const YELLOW: Color = Color::new(0xf9, 0xe2, 0xaf, 93); // modified, cost
     pub const PEACH: Color = Color::new(0xfa, 0xb3, 0x87, 91); // burn, warning
     pub const RED: Color = Color::new(0xf3, 0x8b, 0xa8, 91); // danger, deletions
-    pub const TEAL: Color = Color::new(0x94, 0xe2, 0xd5, 96); // user
     pub const GRAY: Color = Color::new(0x6c, 0x70, 0x86, 90); // dim, separators
-    pub const TEXT: Color = Color::new(0xcd, 0xd6, 0xf4, 97); // default text
 }
 
 /// Wrap `text` in SGR codes for `color`, honoring the color mode. Bold optional.
@@ -242,6 +239,71 @@ impl Glyphs {
     }
 }
 
+impl Glyphs {
+    /// Every glyph this set can emit. Used by the width invariant below; keep
+    /// it exhaustive when adding a field.
+    #[cfg(test)]
+    fn all(&self) -> [(&'static str, &'static str); 18] {
+        [
+            ("branch", self.branch),
+            ("ahead", self.ahead),
+            ("behind", self.behind),
+            ("synced", self.synced),
+            ("model", self.model),
+            ("context", self.context),
+            ("cost", self.cost),
+            ("burn", self.burn),
+            ("block", self.block),
+            ("week", self.week),
+            ("reset", self.reset),
+            ("added", self.added),
+            ("removed", self.removed),
+            ("modified", self.modified),
+            ("conflict", self.conflict),
+            ("stash", self.stash),
+            ("tag", self.tag),
+            ("sep", self.sep),
+        ]
+    }
+}
+
+/// Visible width of a styled string: strip ANSI SGR, count chars, treat wide
+/// emoji as two cells.
+///
+/// This lives beside the glyph table on purpose. The wide-character ranges and
+/// the glyphs they must cover are one decision: a glyph added above without a
+/// matching range here silently misaligns every row that contains it.
+pub fn visible_len(s: &str) -> usize {
+    let mut width = 0usize;
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            // consume CSI ... 'm'
+            for e in chars.by_ref() {
+                if e == 'm' {
+                    break;
+                }
+            }
+            continue;
+        }
+        // zero-width joiners / variation selectors
+        if ('\u{200B}'..='\u{200D}').contains(&c) || ('\u{FE00}'..='\u{FE0F}').contains(&c) {
+            continue;
+        }
+        if is_wide(c) {
+            width += 2;
+        } else {
+            width += 1;
+        }
+    }
+    width
+}
+
+/// Codepoints that occupy two terminal cells in the planes we draw from.
+fn is_wide(c: char) -> bool {
+    ('\u{1F300}'..='\u{1FAFF}').contains(&c) || ('\u{2600}'..='\u{27BF}').contains(&c)
+}
+
 /// Detect the glyph mode from locale/terminal + `STATUSLINE_GLYPHS` env.
 /// Config overrides this at a higher layer.
 pub fn detect_glyph_mode() -> GlyphMode {
@@ -301,6 +363,34 @@ mod tests {
         // mid gray lands in the gray ramp
         let g = rgb_to_256(128, 128, 128);
         assert!((232..=255).contains(&g), "gray idx {g}");
+    }
+
+    #[test]
+    fn visible_len_ignores_ansi_and_counts_emoji_wide() {
+        assert_eq!(visible_len("\x1b[92mabc\x1b[0m"), 3);
+        assert_eq!(visible_len("\u{1f525}"), 2); // 🔥
+    }
+
+    /// BP-005 regression: the width ranges and the glyph table have to agree.
+    /// Any glyph outside the Basic Multilingual Plane renders as two cells in
+    /// practice, so it must fall inside a range `is_wide` recognises —
+    /// otherwise `justify` under-counts it and every row using it drifts.
+    #[test]
+    fn every_wide_glyph_is_covered_by_the_width_ranges() {
+        for mode in [GlyphMode::Ascii, GlyphMode::Unicode, GlyphMode::Nerd] {
+            for (name, glyph) in Glyphs::for_mode(mode).all() {
+                for c in glyph.chars() {
+                    if c as u32 > 0xFFFF {
+                        assert!(
+                            is_wide(c),
+                            "{mode:?} glyph {name:?} contains U+{:04X}, which renders \
+                             two cells but is not in a range visible_len knows",
+                            c as u32
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]

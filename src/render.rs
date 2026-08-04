@@ -4,7 +4,7 @@
 //! string. Segments that have no data are omitted rather than shown empty.
 
 use crate::model::{BurnMode, RateWindow, StatusData};
-use crate::theme::{Color, ColorMode, Glyphs, Palette, paint};
+use crate::theme::{Color, ColorMode, Glyphs, Palette, paint, visible_len};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Which segments to render (mirrors `[segments]` config; all on by default).
@@ -289,35 +289,6 @@ fn seg_week(d: &StatusData, ctx: &RenderCtx) -> Option<String> {
 
 // ---- layout -----------------------------------------------------------------
 
-/// Visible width of a styled string: strip ANSI SGR, count chars, treat wide
-/// emoji as width 2.
-fn visible_len(s: &str) -> usize {
-    let mut width = 0usize;
-    let mut chars = s.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '\x1b' {
-            // consume CSI ... 'm'
-            for e in chars.by_ref() {
-                if e == 'm' {
-                    break;
-                }
-            }
-            continue;
-        }
-        // zero-width joiners / variation selectors
-        if ('\u{200B}'..='\u{200D}').contains(&c) || ('\u{FE00}'..='\u{FE0F}').contains(&c) {
-            continue;
-        }
-        // common wide emoji planes render as 2 cells
-        if ('\u{1F300}'..='\u{1FAFF}').contains(&c) || ('\u{2600}'..='\u{27BF}').contains(&c) {
-            width += 2;
-        } else {
-            width += 1;
-        }
-    }
-    width
-}
-
 /// Spread `parts` across `target` width, distributing padding around a colored
 /// separator so multiple rows line up into an aligned block.
 fn justify(parts: &[String], target: usize, sep: &str, ctx: &RenderCtx) -> String {
@@ -422,12 +393,6 @@ mod tests {
         assert_eq!(fmt_k(500), "500");
         assert_eq!(fmt_k(170_000), "170K");
         assert_eq!(fmt_k(1_500_000), "1.5M");
-    }
-
-    #[test]
-    fn visible_len_ignores_ansi_and_counts_emoji_wide() {
-        assert_eq!(visible_len("\x1b[92mabc\x1b[0m"), 3);
-        assert_eq!(visible_len("\u{1f525}"), 2); // 🔥
     }
 
     #[test]
