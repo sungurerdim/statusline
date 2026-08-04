@@ -125,3 +125,88 @@ impl StatusData {
         Some(cost / (ms as f64 / 3_600_000.0))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// $1.00 over exactly one hour of API time.
+    fn one_hour() -> StatusData {
+        StatusData {
+            cost_usd: Some(1.0),
+            duration_ms: Some(7_200_000),     // 2h wall
+            api_duration_ms: Some(3_600_000), // 1h active
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn api_mode_uses_active_time_not_wall_clock() {
+        let d = one_hour();
+        // 1h of API time -> $1.00/h, not the $0.50/h wall clock would give.
+        assert_eq!(d.burn_usd_per_hr(BurnMode::Api), Some(1.0));
+    }
+
+    #[test]
+    fn wall_mode_uses_wall_clock() {
+        let d = one_hour();
+        assert_eq!(d.burn_usd_per_hr(BurnMode::Wall), Some(0.5));
+    }
+
+    #[test]
+    fn off_mode_yields_nothing() {
+        assert_eq!(one_hour().burn_usd_per_hr(BurnMode::Off), None);
+    }
+
+    /// Harnesses that report cost but no API time must still get a burn rate.
+    #[test]
+    fn api_mode_falls_back_to_wall_when_api_time_absent() {
+        let d = StatusData {
+            api_duration_ms: None,
+            ..one_hour()
+        };
+        assert_eq!(d.burn_usd_per_hr(BurnMode::Api), Some(0.5));
+    }
+
+    /// A zero API duration is "not measured", not "instantaneous" — treating it
+    /// literally would divide by ~0 and print an absurd rate.
+    #[test]
+    fn zero_api_time_falls_back_instead_of_exploding() {
+        let d = StatusData {
+            api_duration_ms: Some(0),
+            ..one_hour()
+        };
+        assert_eq!(d.burn_usd_per_hr(BurnMode::Api), Some(0.5));
+    }
+
+    #[test]
+    fn sub_second_windows_are_suppressed() {
+        let d = StatusData {
+            cost_usd: Some(0.01),
+            duration_ms: Some(999),
+            api_duration_ms: None,
+            ..Default::default()
+        };
+        assert_eq!(d.burn_usd_per_hr(BurnMode::Api), None);
+    }
+
+    #[test]
+    fn missing_cost_yields_nothing() {
+        let d = StatusData {
+            cost_usd: None,
+            ..one_hour()
+        };
+        assert_eq!(d.burn_usd_per_hr(BurnMode::Api), None);
+    }
+
+    #[test]
+    fn untracked_only_tree_has_no_tracked_changes() {
+        let g = GitInfo {
+            untracked: 7,
+            ..Default::default()
+        };
+        assert!(!g.has_tracked_changes());
+        assert_eq!(g.total_add(), 7);
+        assert_eq!(g.total_mod(), 0);
+    }
+}
