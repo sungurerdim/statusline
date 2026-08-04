@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-08-04
+
+### Fixed
+
+- Git commands producing more than the ~64 KiB pipe buffer (e.g.
+  `status -uall` in a large tree) no longer deadlock. The subprocess waiter
+  polled `try_wait()` without ever reading the child's pipes, so the child
+  blocked on `write` and was killed at the 2s timeout — git state was silently
+  dropped on exactly the repos where it matters most.
+
+### Changed
+
+- Subprocess waiting blocks on a worker thread instead of polling on a 5ms
+  sleep, removing the latency quantum that rounded every git call up to the
+  next 5ms boundary. Measured on a dirty 10-file repo: p50 15.9ms → 13.6ms,
+  worst case 21.7ms → 15.1ms, with byte-identical output.
+- `[segments] lines = false` now also skips the `git diff --numstat`
+  subprocess, which previously ran even when its output was never rendered.
+  Measured on the same repo: p50 15.9ms → 8.4ms.
+
 ## [0.1.0] - 2026-07-29
 
 ### Added
