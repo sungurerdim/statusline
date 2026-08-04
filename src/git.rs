@@ -462,7 +462,8 @@ u UU N... 1 2 3 100644 100644 100644 100644 ggg hhh iii conflict.rs
     /// Build a throwaway repo with one committed file modified in the working
     /// tree (2 lines added, 1 removed vs HEAD). Returns its path.
     fn dirty_fixture(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("statusline-test-{name}"));
+        let dir =
+            std::env::temp_dir().join(format!("statusline-test-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let git = |args: &[&str]| {
