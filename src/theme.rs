@@ -240,29 +240,53 @@ impl Glyphs {
 }
 
 impl Glyphs {
-    /// Every glyph this set can emit. Used by the width invariant below; keep
-    /// it exhaustive when adding a field.
+    /// Every glyph this set can emit, for the width invariant below.
+    ///
+    /// The destructuring pattern is the point: it is exhaustive, so adding a
+    /// field to `Glyphs` fails to compile here until the new glyph is listed.
+    /// Without that, a new glyph would silently fall outside the invariant and
+    /// the width bug it guards against would come back unnoticed.
     #[cfg(test)]
     fn all(&self) -> [(&'static str, &'static str); 18] {
+        let Glyphs {
+            branch,
+            ahead,
+            behind,
+            synced,
+            model,
+            context,
+            cost,
+            burn,
+            block,
+            week,
+            reset,
+            added,
+            removed,
+            modified,
+            conflict,
+            stash,
+            tag,
+            sep,
+        } = *self;
         [
-            ("branch", self.branch),
-            ("ahead", self.ahead),
-            ("behind", self.behind),
-            ("synced", self.synced),
-            ("model", self.model),
-            ("context", self.context),
-            ("cost", self.cost),
-            ("burn", self.burn),
-            ("block", self.block),
-            ("week", self.week),
-            ("reset", self.reset),
-            ("added", self.added),
-            ("removed", self.removed),
-            ("modified", self.modified),
-            ("conflict", self.conflict),
-            ("stash", self.stash),
-            ("tag", self.tag),
-            ("sep", self.sep),
+            ("branch", branch),
+            ("ahead", ahead),
+            ("behind", behind),
+            ("synced", synced),
+            ("model", model),
+            ("context", context),
+            ("cost", cost),
+            ("burn", burn),
+            ("block", block),
+            ("week", week),
+            ("reset", reset),
+            ("added", added),
+            ("removed", removed),
+            ("modified", modified),
+            ("conflict", conflict),
+            ("stash", stash),
+            ("tag", tag),
+            ("sep", sep),
         ]
     }
 }
