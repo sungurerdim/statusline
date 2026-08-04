@@ -58,6 +58,48 @@ impl RenderCtx {
     }
 }
 
+// ---- input bounds ------------------------------------------------------------
+//
+// The bar is a fixed-width widget, but every number and string in it arrives
+// from a harness we do not control. Rendering a field at whatever size it
+// arrives pushes the line past the terminal and destroys the alignment of every
+// row — a 5000-character model name produced a 5013-character status line.
+//
+// Eliding keeps the "never print a value we made up" rule intact: nothing is
+// invented, an over-long value is cut and the cut is marked.
+
+/// Model names beyond this are elided. Comfortably fits every real model id.
+const MAX_MODEL_CHARS: usize = 40;
+/// Percentages above this are implausible; show the ceiling, marked.
+const MAX_PCT: f64 = 999.0;
+/// Reset countdowns beyond this are implausible; show the ceiling, marked.
+const MAX_DURATION_DAYS: i64 = 99;
+
+/// Cut `s` to `max` characters, marking the cut. ASCII marker so it is safe in
+/// every glyph mode, including non-UTF-8 terminals.
+fn elide(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let kept: String = s.chars().take(max.saturating_sub(3)).collect();
+    format!("{kept}...")
+}
+
+/// Render a percentage, clamped to a plausible range. Values outside it are
+/// shown at the bound with a `+`/`-` marker rather than verbatim.
+fn fmt_pct(pct: f64) -> String {
+    if !pct.is_finite() {
+        return "?%".to_string();
+    }
+    if pct > MAX_PCT {
+        return format!("{}+%", MAX_PCT as i64);
+    }
+    if pct < 0.0 {
+        return "0%".to_string();
+    }
+    format!("{}%", pct.round() as i64)
+}
+
 /// Format a token count compactly: 170000 -> "170K", 1500000 -> "1.5M".
 fn fmt_k(n: u64) -> String {
     if n >= 1_000_000 {
@@ -90,6 +132,9 @@ fn remaining_secs(resets_at: i64) -> Option<i64> {
 /// Compact duration: `2d3h`, `4h12m`, `9m` (never zero-padded, coarsest 2 units).
 fn fmt_duration(secs: i64) -> String {
     let d = secs / 86_400;
+    if d > MAX_DURATION_DAYS {
+        return format!("{MAX_DURATION_DAYS}d+");
+    }
     let h = (secs % 86_400) / 3600;
     let m = (secs % 3600) / 60;
     if d > 0 {
@@ -105,7 +150,7 @@ fn fmt_duration(secs: i64) -> String {
 /// reset countdown when a future `resets_at` is known.
 fn rate_segment(glyph: &str, w: &RateWindow, ctx: &RenderCtx) -> String {
     let mut s = ctx.p(
-        &format!("{glyph} {}%", w.used_pct.round() as i64),
+        &format!("{glyph} {}", fmt_pct(w.used_pct)),
         pct_color(w.used_pct),
         false,
     );
@@ -146,7 +191,10 @@ fn seg_git(d: &StatusData, ctx: &RenderCtx) -> Option<String> {
         .or(d.project_name.as_deref())
         .unwrap_or("repo");
     let mut s = ctx.p(
-        &with_glyph(ctx.glyphs.branch, &format!("{repo}:{branch}")),
+        &with_glyph(
+            ctx.glyphs.branch,
+            &elide(&format!("{repo}:{branch}"), MAX_MODEL_CHARS),
+        ),
         Palette::GREEN,
         true,
     );
@@ -185,7 +233,11 @@ fn seg_git(d: &StatusData, ctx: &RenderCtx) -> Option<String> {
     }
     if let Some(tag) = &git.tag {
         s.push(' ');
-        s.push_str(&ctx.p(&format!("{}{tag}", ctx.glyphs.tag), Palette::GRAY, false));
+        s.push_str(&ctx.p(
+            &format!("{}{}", ctx.glyphs.tag, elide(tag, MAX_MODEL_CHARS)),
+            Palette::GRAY,
+            false,
+        ));
     }
     // Fully in sync with the remote: clean tree, nothing to push/pull, upstream
     // set. A positive "all good" marker, mirroring the commit/push-needed cues.
@@ -199,13 +251,17 @@ fn seg_git(d: &StatusData, ctx: &RenderCtx) -> Option<String> {
 }
 
 fn seg_model(d: &StatusData, ctx: &RenderCtx) -> Option<String> {
-    let name = d.model_name.as_deref()?;
-    let mut s = ctx.p(&with_glyph(ctx.glyphs.model, name), Palette::MAUVE, false);
+    let name = elide(d.model_name.as_deref()?, MAX_MODEL_CHARS);
+    let mut s = ctx.p(&with_glyph(ctx.glyphs.model, &name), Palette::MAUVE, false);
     if let Some(level) = d.effort_level.as_deref()
         && level != "medium"
         && !level.is_empty()
     {
-        s.push_str(&ctx.p(&format!(" {level}"), Palette::GRAY, false));
+        s.push_str(&ctx.p(
+            &format!(" {}", elide(level, MAX_MODEL_CHARS)),
+            Palette::GRAY,
+            false,
+        ));
     }
     Some(s)
 }
@@ -214,9 +270,9 @@ fn seg_context(d: &StatusData, ctx: &RenderCtx) -> Option<String> {
     let pct = d.context_used_pct?;
     let tokens = d.context_tokens.map(fmt_k).unwrap_or_default();
     let body = if tokens.is_empty() {
-        format!("{} {}%", ctx.glyphs.context, pct.round() as i64)
+        format!("{} {}", ctx.glyphs.context, fmt_pct(pct))
     } else {
-        format!("{} {tokens} {}%", ctx.glyphs.context, pct.round() as i64)
+        format!("{} {tokens} {}", ctx.glyphs.context, fmt_pct(pct))
     };
     Some(ctx.p(&body, pct_color(pct), false))
 }
@@ -263,6 +319,11 @@ fn seg_changes(d: &StatusData, ctx: &RenderCtx) -> Option<String> {
 
 fn seg_cost(d: &StatusData, ctx: &RenderCtx) -> Option<String> {
     let cost = d.cost_usd?;
+    // A negative or non-finite cost is not a value the session could have
+    // produced. Showing nothing is honest; showing "$-5.00" is not.
+    if !cost.is_finite() || cost < 0.0 {
+        return None;
+    }
     let mut s = ctx.p(
         &format!("{}{cost:.2}", ctx.glyphs.cost),
         Palette::YELLOW,
@@ -386,6 +447,80 @@ mod tests {
             segments: SegmentFlags::default(),
             burn: BurnMode::Api,
         }
+    }
+
+    /// BP-101 regression: a harness field must never be able to set the width
+    /// of the bar. Fuzzing found a 5000-char model name producing a 5013-char
+    /// line, which destroys the alignment of every row.
+    #[test]
+    fn an_absurd_model_name_cannot_stretch_the_line() {
+        let d = StatusData {
+            model_name: Some("A".repeat(5000)),
+            ..Default::default()
+        };
+        let out = render(&d, &ascii_ctx(Layout::Single));
+        assert!(
+            out.chars().count() < 120,
+            "line grew to {} chars: {out}",
+            out.chars().count()
+        );
+        assert!(out.contains("..."), "the cut must be visible: {out}");
+    }
+
+    #[test]
+    fn elide_keeps_short_values_untouched() {
+        assert_eq!(elide("Opus 5", 40), "Opus 5");
+        assert_eq!(elide("abcdef", 6), "abcdef");
+        assert_eq!(elide("abcdefg", 6), "abc...");
+    }
+
+    /// BP-104 regression: `resets_at = i64::MAX` rendered as
+    /// `↻106751991146631d1h`.
+    #[test]
+    fn fmt_duration_has_a_ceiling() {
+        assert_eq!(fmt_duration(3600), "1h0m");
+        assert_eq!(fmt_duration(99 * 86_400), "99d0h");
+        assert_eq!(fmt_duration(i64::MAX), "99d+");
+    }
+
+    /// BP-105 regression: `used_percentage: 1e9` printed `1000000000%`.
+    #[test]
+    fn fmt_pct_clamps_implausible_values() {
+        assert_eq!(fmt_pct(17.4), "17%");
+        assert_eq!(fmt_pct(1e9), "999+%");
+        assert_eq!(fmt_pct(-5.0), "0%");
+        assert_eq!(fmt_pct(f64::NAN), "?%");
+        assert_eq!(fmt_pct(f64::INFINITY), "?%");
+    }
+
+    /// BP-106 regression: a negative cost rendered as `$-5.00` with a matching
+    /// negative burn rate. Nothing is a truthful rendering of a value the
+    /// session cannot have produced.
+    #[test]
+    fn implausible_cost_is_omitted_rather_than_shown() {
+        for bad in [-5.0, f64::NAN, f64::INFINITY] {
+            let d = StatusData {
+                cost_usd: Some(bad),
+                duration_ms: Some(3_600_000),
+                ..Default::default()
+            };
+            let out = render(&d, &ascii_ctx(Layout::Single));
+            assert!(!out.contains('$'), "cost {bad} should be hidden: {out}");
+        }
+    }
+
+    #[test]
+    fn a_very_long_branch_name_is_elided_too() {
+        let d = StatusData {
+            git: Some(GitInfo {
+                repo_name: Some("repo".into()),
+                branch: Some("feature/".to_string() + &"x".repeat(500)),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let out = render(&d, &ascii_ctx(Layout::Single));
+        assert!(out.chars().count() < 120, "{out}");
     }
 
     #[test]

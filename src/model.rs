@@ -111,6 +111,11 @@ impl StatusData {
     /// missing, or the window is too small to be meaningful.
     pub fn burn_usd_per_hr(&self, mode: BurnMode) -> Option<f64> {
         let cost = self.cost_usd?;
+        // Mirrors the cost segment: a negative or non-finite cost cannot yield
+        // a meaningful rate, so report nothing rather than a nonsense number.
+        if !cost.is_finite() || cost < 0.0 {
+            return None;
+        }
         let ms = match mode {
             BurnMode::Off => return None,
             BurnMode::Wall => self.duration_ms?,
