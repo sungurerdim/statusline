@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-04
+
+### Fixed
+
+- Stalled `git` subprocesses are terminated on every supported platform again.
+  v0.1.1 replaced the cross-platform `Child::kill()` with a Unix-only `kill`
+  spawn, so on Windows a hung child was never stopped. The timeout path now
+  uses `kill` on Unix and `taskkill /T /F` on Windows.
+- `git diff --numstat` line counts saturate at `u32::MAX` instead of wrapping
+  in release builds or panicking in debug builds on a pathological diff.
+- A failed waiter-thread spawn now signals the child instead of abandoning it.
+
+### Changed
+
+- Config values are typed rather than free strings: an unknown value
+  (`color = "trucolor"`, `[git] untracked = "banana"`) is now reported on
+  stderr and falls back to defaults, where it previously slipped through a
+  catch-all arm and silently changed behaviour.
+- `visible_len` moved from `render` to `theme`, beside the glyph table it has
+  to agree with. A new invariant test fails if a glyph is added whose width the
+  measurement code does not recognise — previously that silently misaligned
+  every row containing it.
+- Unused palette constants (`BLUE`, `TEAL`, `TEXT`) and the
+  `#[allow(dead_code)]` hiding them were removed.
+- Dependencies: serde 1.0.229, serde_json 1.0.151, toml 1.1.4; pinned action
+  SHAs refreshed.
+
+### Added
+
+- Declared MSRV (`rust-version = "1.85"`), enforced by a CI job that builds on
+  exactly that toolchain.
+- CI runs the full suite on macOS, Linux, and Windows, all with `--locked` so a
+  green run reflects the committed `Cargo.lock`. Coverage is measured via
+  `cargo llvm-cov`.
+- Integration tests (`tests/cli.rs`) covering the real binary end to end:
+  full harness payload, bare stdin, malformed stdin, and running outside a repo.
+- Unit tests for `burn_usd_per_hr` (api/wall/off, sub-second guard, zero-API
+  fallback), previously untested.
+- `scripts/bench.sh` — the reproducible benchmark the README's numbers come from.
+- Release workflow publishing binaries for macOS (arm64/x86_64), Linux, and
+  Windows on tag push.
+- `.github/CODEOWNERS`, and a platform-support section in the README.
+
 ## [0.1.1] - 2026-08-04
 
 ### Fixed
