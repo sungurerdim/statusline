@@ -7,8 +7,12 @@
 //!
 //! Missing/invalid file → built-in defaults (the tool must always render).
 //!
-//! Everything here is optional; env vars (`STATUSLINE_LAYOUT`, `NO_COLOR`, …)
-//! still apply and take precedence over the file for the values they cover.
+//! Every option is a typed enum rather than a free string, so a typo
+//! (`color = "trucolor"`) is reported on stderr instead of silently degrading
+//! to whatever the fallback arm happened to be.
+//!
+//! Env vars (`STATUSLINE_LAYOUT`, `NO_COLOR`, …) still apply and take
+//! precedence over the file for the values they cover.
 
 use crate::git::{GitOptions, UntrackedMode};
 use crate::model::BurnMode;
@@ -18,17 +22,62 @@ use serde::Deserialize;
 use std::env;
 use std::path::PathBuf;
 
+/// Row layout. `multi` is the default aligned block.
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum LayoutOpt {
+    Multi,
+    Single,
+}
+
+/// Icon vocabulary. `auto` defers to locale/terminal detection.
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum GlyphOpt {
+    Auto,
+    Ascii,
+    Unicode,
+    Nerd,
+}
+
+/// Color depth. `auto` defers to `NO_COLOR`/`COLORTERM`/`TERM` detection.
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ColorOpt {
+    Auto,
+    Off,
+    #[serde(rename = "16")]
+    Ansi16,
+    #[serde(rename = "256")]
+    Ansi256,
+    Truecolor,
+}
+
+/// Burn-rate denominator.
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum BurnOpt {
+    Api,
+    Wall,
+    Off,
+}
+
+/// How much of the untracked set `git status` should scan.
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum UntrackedOpt {
+    No,
+    Normal,
+    All,
+}
+
 #[derive(Debug, Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
-    /// "multi" (default) or "single".
-    pub layout: Option<String>,
-    /// "auto" (default), "ascii", "unicode", "nerd".
-    pub glyphs: Option<String>,
-    /// "auto" (default), "off", "16", "256", "truecolor".
-    pub color: Option<String>,
-    /// Burn-rate basis: "api" (default, idle-excluded), "wall", "off".
-    pub burn: Option<String>,
+    pub layout: Option<LayoutOpt>,
+    pub glyphs: Option<GlyphOpt>,
+    pub color: Option<ColorOpt>,
+    pub burn: Option<BurnOpt>,
     pub git: GitConfig,
     pub segments: Segments,
 }
@@ -36,15 +85,14 @@ pub struct Config {
 #[derive(Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct GitConfig {
-    /// "normal" (default), "no", "all".
-    pub untracked: String,
+    pub untracked: UntrackedOpt,
     pub tags: bool,
 }
 
 impl Default for GitConfig {
     fn default() -> Self {
         Self {
-            untracked: "normal".into(),
+            untracked: UntrackedOpt::Normal,
             tags: false,
         }
     }
@@ -99,10 +147,10 @@ impl Config {
     }
 
     pub fn git_options(&self) -> GitOptions {
-        let untracked = match self.git.untracked.as_str() {
-            "no" => UntrackedMode::No,
-            "all" => UntrackedMode::All,
-            _ => UntrackedMode::Normal,
+        let untracked = match self.git.untracked {
+            UntrackedOpt::No => UntrackedMode::No,
+            UntrackedOpt::All => UntrackedMode::All,
+            UntrackedOpt::Normal => UntrackedMode::Normal,
         };
         GitOptions {
             untracked,
@@ -113,43 +161,46 @@ impl Config {
 
     /// Resolve layout: env `STATUSLINE_LAYOUT` overrides file overrides default.
     pub fn layout(&self) -> Layout {
-        let v = env::var("STATUSLINE_LAYOUT")
-            .ok()
-            .or_else(|| self.layout.clone());
-        match v.as_deref() {
-            Some("single") => Layout::Single,
+        if let Ok(v) = env::var("STATUSLINE_LAYOUT") {
+            return match v.as_str() {
+                "single" => Layout::Single,
+                _ => Layout::Multi,
+            };
+        }
+        match self.layout {
+            Some(LayoutOpt::Single) => Layout::Single,
             _ => Layout::Multi,
         }
     }
 
-    /// Resolve glyph mode: file "auto"/absent → env/locale detection.
+    /// Resolve glyph mode: file `auto`/absent → env/locale detection.
     pub fn glyph_mode(&self) -> GlyphMode {
-        match self.glyphs.as_deref() {
-            Some("ascii") => GlyphMode::Ascii,
-            Some("unicode") => GlyphMode::Unicode,
-            Some("nerd") => GlyphMode::Nerd,
-            _ => crate::theme::detect_glyph_mode(),
+        match self.glyphs {
+            Some(GlyphOpt::Ascii) => GlyphMode::Ascii,
+            Some(GlyphOpt::Unicode) => GlyphMode::Unicode,
+            Some(GlyphOpt::Nerd) => GlyphMode::Nerd,
+            Some(GlyphOpt::Auto) | None => crate::theme::detect_glyph_mode(),
         }
     }
 
     /// Resolve burn-rate basis (default: API/active time).
     pub fn burn_mode(&self) -> BurnMode {
-        match self.burn.as_deref() {
-            Some("wall") => BurnMode::Wall,
-            Some("off") => BurnMode::Off,
-            _ => BurnMode::Api,
+        match self.burn {
+            Some(BurnOpt::Wall) => BurnMode::Wall,
+            Some(BurnOpt::Off) => BurnMode::Off,
+            Some(BurnOpt::Api) | None => BurnMode::Api,
         }
     }
 
     /// Resolve color mode: file explicit value wins, else env detection. `off`
     /// is always honored via detection too (NO_COLOR), so detection stays last.
     pub fn color_mode(&self) -> ColorMode {
-        match self.color.as_deref() {
-            Some("off") => ColorMode::None,
-            Some("16") => ColorMode::Ansi16,
-            Some("256") => ColorMode::Ansi256,
-            Some("truecolor") => ColorMode::Truecolor,
-            _ => crate::theme::detect_color_mode(),
+        match self.color {
+            Some(ColorOpt::Off) => ColorMode::None,
+            Some(ColorOpt::Ansi16) => ColorMode::Ansi16,
+            Some(ColorOpt::Ansi256) => ColorMode::Ansi256,
+            Some(ColorOpt::Truecolor) => ColorMode::Truecolor,
+            Some(ColorOpt::Auto) | None => crate::theme::detect_color_mode(),
         }
     }
 }
@@ -184,7 +235,7 @@ mod tests {
     fn defaults_are_all_on() {
         let c = Config::default();
         assert!(c.segments.git && c.segments.cost && c.segments.block);
-        assert_eq!(c.git.untracked, "normal");
+        assert_eq!(c.git.untracked, UntrackedOpt::Normal);
         assert!(!c.git.tags);
     }
 
@@ -202,7 +253,7 @@ mod tests {
         "#,
         )
         .unwrap();
-        assert_eq!(c.layout.as_deref(), Some("single"));
+        assert_eq!(c.layout, Some(LayoutOpt::Single));
         assert_eq!(c.glyph_mode(), GlyphMode::Nerd);
         assert_eq!(c.git_options().untracked, UntrackedMode::No);
         assert!(c.git.tags);
@@ -216,10 +267,35 @@ mod tests {
         assert!(r.is_err());
     }
 
+    /// BP-004 regression: before typed options, a misspelled *value* fell
+    /// through the catch-all arm and silently produced the default. A typo in
+    /// a config must surface, not quietly change behaviour.
+    #[test]
+    fn invalid_value_is_rejected() {
+        for bad in [
+            r#"color = "trucolor""#,
+            r#"layout = "sngle""#,
+            r#"glyphs = "nerdfont""#,
+            r#"burn = "wallclock""#,
+            "[git]\nuntracked = \"banana\"",
+        ] {
+            let r: Result<Config, _> = toml::from_str(bad);
+            assert!(r.is_err(), "expected {bad:?} to be rejected");
+        }
+    }
+
     #[test]
     fn color_override_wins() {
         let c: Config = toml::from_str(r#"color = "off""#).unwrap();
         assert_eq!(c.color_mode(), ColorMode::None);
+    }
+
+    #[test]
+    fn numeric_color_levels_parse() {
+        let c: Config = toml::from_str(r#"color = "256""#).unwrap();
+        assert_eq!(c.color_mode(), ColorMode::Ansi256);
+        let c: Config = toml::from_str(r#"color = "16""#).unwrap();
+        assert_eq!(c.color_mode(), ColorMode::Ansi16);
     }
 
     #[test]
@@ -229,5 +305,13 @@ mod tests {
         assert_eq!(w.burn_mode(), BurnMode::Wall);
         let o: Config = toml::from_str(r#"burn = "off""#).unwrap();
         assert_eq!(o.burn_mode(), BurnMode::Off);
+    }
+
+    /// `lines = false` must reach the git layer so the diff spawn is skipped.
+    #[test]
+    fn lines_segment_flows_into_git_options() {
+        let c: Config = toml::from_str("[segments]\nlines = false").unwrap();
+        assert!(!c.git_options().lines);
+        assert!(Config::default().git_options().lines);
     }
 }

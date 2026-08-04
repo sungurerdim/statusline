@@ -6,7 +6,8 @@
 #   3. ~/.config/statusline/config.toml       (or $XDG_CONFIG_HOME/statusline/config.toml)
 #
 # Every key below is OPTIONAL and shown set to its built-in default — delete a
-# line to keep the default, or change it. Unknown keys are rejected (typo guard).
+# line to keep the default, or change it. Unknown keys AND unknown values are
+# both rejected (typo guard) — `color = "trucolor"` is reported, not ignored.
 # A broken config never breaks the bar: it warns on stderr and falls back to
 # defaults. Environment variables (NO_COLOR, FORCE_COLOR, STATUSLINE_LAYOUT,
 # STATUSLINE_GLYPHS) still apply and override the matching value here.
