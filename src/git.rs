@@ -20,33 +20,60 @@
 
 use crate::model::GitInfo;
 use std::process::{Command, Output, Stdio};
-use std::time::{Duration, Instant};
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 
-/// Ceiling on any single `git` subprocess — well above the ~8ms typical
-/// render, but bounded so a hung/blocked process (lock contention, a repo on
-/// a stalled network mount, ...) can't stall the statusline indefinitely.
+/// Ceiling on any single `git` subprocess — well above the ~6ms typical call,
+/// but bounded so a hung/blocked process (lock contention, a repo on a stalled
+/// network mount, ...) can't stall the statusline indefinitely.
 const GIT_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// Run `cmd`, killing it and returning `None` if it doesn't finish within
-/// [`GIT_TIMEOUT`]. Polls rather than spawning a watcher thread — simplest
-/// correct option for a bound this generous.
+/// Run `cmd` and return its output, or `None` if it doesn't finish within
+/// `timeout` (the child is signalled before we give up).
+///
+/// A worker thread does the blocking `wait_with_output()` and the caller waits
+/// on a channel. Two reasons this beats the obvious `try_wait()` poll loop:
+///
+/// - **No latency quantum.** Polling on a fixed 5ms sleep rounded every git
+///   call up to the next 5ms boundary; a 6ms `git status` cost 10ms. Blocking
+///   returns the instant the child does.
+/// - **No pipe deadlock.** `wait_with_output()` drains stdout/stderr while it
+///   waits. A poll loop never reads the pipes, so any git command producing
+///   more than the ~64 KiB pipe buffer (e.g. `status -uall` in a large tree)
+///   blocked forever on write and was killed at the timeout — the statusline
+///   silently lost git state exactly on the repos where it matters most.
 fn run_with_timeout(cmd: &mut Command, timeout: Duration) -> Option<Output> {
-    let mut child = cmd
+    let child = cmd
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .ok()?;
-    let start = Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => return child.wait_with_output().ok(),
-            Ok(None) if start.elapsed() >= timeout => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
-            }
-            Ok(None) => std::thread::sleep(Duration::from_millis(5)),
-            Err(_) => return None,
+    // Kept for the timeout path: the worker still owns the `Child` (so it is
+    // unreaped and the pid cannot have been recycled) but we can no longer
+    // call `.kill()` on it from here.
+    let pid = child.id();
+
+    let (tx, rx) = mpsc::channel();
+    // 64 KiB stack: this thread only blocks on wait and sends the result.
+    thread::Builder::new()
+        .stack_size(64 * 1024)
+        .spawn(move || {
+            let _ = tx.send(child.wait_with_output());
+        })
+        .ok()?;
+
+    match rx.recv_timeout(timeout) {
+        Ok(Ok(out)) => Some(out),
+        // Timed out or the wait itself failed. Signal the child so a stalled
+        // git can't accumulate across renders (we run once every refresh).
+        _ => {
+            let _ = Command::new("kill")
+                .args(["-TERM", &pid.to_string()])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+            None
         }
     }
 }
@@ -58,6 +85,10 @@ pub struct GitOptions {
     pub untracked: UntrackedMode,
     /// Also run `git describe` for the latest tag (extra spawn).
     pub tags: bool,
+    /// Whether the caller renders the uncommitted line diff. When off we skip
+    /// the `git diff --numstat` spawn entirely — it is pure waste otherwise,
+    /// and it is the single most expensive thing we do after `status`.
+    pub lines: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,6 +103,7 @@ impl Default for GitOptions {
         Self {
             untracked: UntrackedMode::Normal,
             tags: false,
+            lines: true,
         }
     }
 }
@@ -109,9 +141,10 @@ pub fn collect(cwd: Option<&str>, opts: GitOptions, repo_name: Option<&str>) -> 
     let mut info = parse_porcelain_v2(&text)?;
     info.repo_name = repo_name.map(str::to_string);
 
-    // Uncommitted line diff — only when tracked changes exist, so a clean tree
-    // costs zero extra I/O (nothing to diff, resets naturally after a commit).
-    if info.has_tracked_changes() {
+    // Uncommitted line diff — only when the segment is rendered *and* tracked
+    // changes exist, so a clean tree (or a config without the `lines` segment)
+    // costs zero extra I/O.
+    if opts.lines && info.has_tracked_changes() {
         let (added, removed) = diff_lines(cwd);
         info.diff_added = added;
         info.diff_removed = removed;
@@ -236,6 +269,7 @@ fn tally_xy(xy: &str, info: &mut GitInfo) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Instant;
 
     #[test]
     fn parses_clean_branch() {
@@ -334,5 +368,93 @@ u UU N... 1 2 3 100644 100644 100644 100644 ggg hhh iii conflict.rs
         let out = run_with_timeout(&mut cmd, Duration::from_secs(2)).unwrap();
         assert!(out.status.success());
         assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "hi");
+    }
+
+    /// Guards the pipe-deadlock the old `try_wait()` poll loop had: it never
+    /// read the child's pipes, so any output past the ~64 KiB pipe buffer
+    /// wedged the child on `write` until the timeout killed it. 1 MiB of
+    /// output must come back whole, well inside the bound.
+    #[test]
+    fn run_with_timeout_survives_output_larger_than_the_pipe_buffer() {
+        let mut cmd = Command::new("sh");
+        cmd.args([
+            "-c",
+            "yes 0123456789012345678901234567890123456789 | head -n 25000",
+        ]);
+        let start = Instant::now();
+        let out = run_with_timeout(&mut cmd, Duration::from_secs(2))
+            .expect("large output must not deadlock");
+        assert!(out.status.success());
+        assert_eq!(out.stdout.len(), 25_000 * 41, "output truncated");
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "should stream through, not hit the timeout"
+        );
+    }
+
+    /// Build a throwaway repo with one committed file modified in the working
+    /// tree (2 lines added, 1 removed vs HEAD). Returns its path.
+    fn dirty_fixture(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("statusline-test-{name}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let git = |args: &[&str]| {
+            Command::new("git")
+                .args(args)
+                .current_dir(&dir)
+                .output()
+                .unwrap()
+        };
+        git(&["init", "-q"]);
+        git(&["config", "user.email", "test@example.com"]);
+        git(&["config", "user.name", "Test User"]);
+        std::fs::write(dir.join("a.txt"), "one\ntwo\nthree\n").unwrap();
+        git(&["add", "-A"]);
+        git(&["commit", "-qm", "init"]);
+        // -1 line ("two"), +2 lines ("2a", "2b")
+        std::fs::write(dir.join("a.txt"), "one\n2a\n2b\nthree\n").unwrap();
+        dir
+    }
+
+    /// A clean tree already skipped the `git diff --numstat` spawn. This pins
+    /// the other half: with `segments.lines = false` the diff must be skipped
+    /// even on a dirty tree — and the rest of the git state must survive.
+    #[test]
+    fn lines_disabled_skips_the_diff_but_keeps_git_state() {
+        let dir = dirty_fixture("lines-off");
+        let cwd = dir.to_str().unwrap();
+
+        let on = collect(
+            Some(cwd),
+            GitOptions {
+                lines: true,
+                ..Default::default()
+            },
+            None,
+        )
+        .expect("fixture must be a repo");
+        assert_eq!(
+            (on.diff_added, on.diff_removed),
+            (2, 1),
+            "baseline: diff is measured when the segment is on"
+        );
+
+        let off = collect(
+            Some(cwd),
+            GitOptions {
+                lines: false,
+                ..Default::default()
+            },
+            None,
+        )
+        .expect("fixture must be a repo");
+        assert_eq!(
+            (off.diff_added, off.diff_removed),
+            (0, 0),
+            "diff must be skipped when the lines segment is off"
+        );
+        assert_eq!(off.wt_mod, 1, "file-level status must still be collected");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

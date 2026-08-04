@@ -57,6 +57,8 @@ git     = true   # repo:branch, ahead/behind, conflicts, stash, synced ✓
 model   = true   # active model name (+ reasoning effort when not "medium")
 context = true   # context window: tokens + % used (color-coded 70/90)
 lines   = true   # uncommitted line diff (+added −removed vs HEAD; clears on commit)
+                 # setting this false also skips the `git diff --numstat` spawn,
+                 # which roughly halves render time on a dirty tree
 changes = true   # working-tree file counts (~modified +added −deleted)
 cost    = true   # session cost $ + burn rate
 block   = true   # 5-hour rate-limit window: % used + reset countdown

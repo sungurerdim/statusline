@@ -107,6 +107,7 @@ impl Config {
         GitOptions {
             untracked,
             tags: self.git.tags,
+            lines: self.segments.lines,
         }
     }
 
