@@ -73,8 +73,10 @@ jobs:
         with:
           toolchain: stable
           components: llvm-tools-preview
-      - uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2.85.7
-        with:
-          tool: cargo-llvm-cov
+      # Built from source rather than pulled as a prebuilt binary from a
+      # third party: slower, but the coverage job then adds no new download
+      # surface to the pipeline.
+      - name: Install cargo-llvm-cov
+        run: cargo install --locked cargo-llvm-cov
       - name: Measure coverage
         run: cargo llvm-cov --locked --summary-only
