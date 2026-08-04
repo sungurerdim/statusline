@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-08-04
+
+### Fixed
+
+- Nothing a harness sends can stretch the bar any more. Boundary fuzzing found
+  that every rendered field was unbounded: a 5000-character model name produced
+  a 5013-character status line, `resets_at = i64::MAX` rendered as
+  `106751991146631d1h`, and `used_percentage: 1e9` printed `1000000000%`. Model
+  names, effort levels, repo/branch names and tags are now elided with a visible
+  `...`, percentages clamp at `999+%`, and countdowns at `99d+`. Nothing is
+  invented — over-long values are cut and the cut is marked.
+- A negative or non-finite cost is no longer rendered. `$-5.00` with a matching
+  negative burn rate is not a value a session can produce; the segment is now
+  omitted, which is what the tool already does for data it does not have.
+- The release workflow no longer swallows every `gh release create` failure.
+  Only "the release already exists" is tolerated; auth and permission errors
+  fail the job instead of reporting success with nothing published.
+
+### Changed
+
+- `Glyphs::all()` destructures exhaustively, so adding a glyph fails to compile
+  until it is added to the width invariant — previously the guard could silently
+  stop covering new glyphs.
+- The benchmark moved from `scripts/bench.sh` to `tests/bench.rs`
+  (`cargo test --release --test bench -- --ignored --nocapture`), so it runs on
+  Windows too rather than requiring a POSIX shell.
+- The coverage job builds `cargo-llvm-cov` from source instead of downloading a
+  third-party prebuilt binary, removing that surface from the pipeline.
+- Test fixtures use pid-qualified temp directories, so concurrent test runs on
+  one machine cannot race on the same path.
+- README performance figures re-measured with the portable benchmark; the
+  unreproducible CPU-per-100-renders row was dropped rather than left standing.
+
 ## [0.2.0] - 2026-08-04
 
 ### Fixed

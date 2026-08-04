@@ -36,8 +36,9 @@ Built to replace an older Go statusline and to fix what the ecosystem's tools mi
   using whatever is present and omitting what isn't — no per-harness build.
 - **Cheap.** One `git status` (with `--no-optional-locks`, so it never writes a
   lock), a second `git diff` only when the tree is dirty, no temp files, no disk
-  writes. ~493 KB binary; ~13.9 ms per render on a dirty tree, ~8.6 ms on a
-  clean one — reproduce with [`scripts/bench.sh`](scripts/bench.sh).
+  writes. ~493 KB binary; ~14.6 ms per render on a dirty tree, ~9.2 ms on a
+  clean one. Reproduce on any platform with
+  `cargo test --release --test bench -- --ignored --nocapture`.
 
 ## Old vs new
 
@@ -53,15 +54,15 @@ NEW  ⌥ slcmp:main △1  ·  ◉ Opus 4.8 high  ·  ◔ 214K 22%
 ```
 
 The Go figures below are the original 2026-07 measurement and were **not**
-re-run for v0.2.0; the Rust figures are current, from
-[`scripts/bench.sh`](scripts/bench.sh) on a 10-file repo. Treat the perf rows as
-"same machine, different fixture" rather than a strict head-to-head.
+re-run; the Rust figures come from the bench test on a 10-file repo. Treat the
+perf row as "same machine, different fixture", not a strict head-to-head. The
+old CPU-per-100-renders figure is dropped: the script that produced it is gone
+and nothing in the repo reproduces it, so quoting it would be unverifiable.
 
 | | Old (Go) | New (Rust) |
 |---|---|---|
 | Binary size | 2.0 MB | **493 KB** (~4.1× smaller) |
-| CPU / 100 renders | 2.01 s (186% — many git spawns) | **1.32 s** |
-| Wall / render | ~10.8 ms | **~8.6 ms** clean tree / ~13.9 ms dirty |
+| Wall / render | ~10.8 ms | **~9.2 ms** clean tree / ~14.6 ms dirty |
 | git subprocesses | 3–4 per render | **1** (+1 diff only when dirty) |
 | Session cost $ | ✗ | ✓ |
 | Burn rate ($/hr, idle-excluded) | ✗ | ✓ |
