@@ -50,8 +50,12 @@ const CLAUDE_CODE_PAYLOAD: &str = r#"{
 }"#;
 
 /// A git repo with one committed file, modified in the working tree.
+///
+/// The directory name carries the pid so two concurrent runs on one machine
+/// (a second `cargo test`, or a coverage run alongside it) cannot race on the
+/// same path — the fixture starts by deleting it.
 fn fixture(name: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("statusline-cli-{name}"));
+    let dir = std::env::temp_dir().join(format!("statusline-cli-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let git = |args: &[&str]| {
@@ -106,7 +110,7 @@ fn renders_git_only_line_without_harness_input() {
     let dir = fixture("bare");
     let out = run("", &dir);
     assert!(
-        out.contains("statusline-cli-bare:"),
+        out.contains("statusline-cli-bare"),
         "repo line missing: {out}"
     );
     assert!(
@@ -122,7 +126,7 @@ fn malformed_stdin_still_renders_rather_than_failing() {
     let out = run("not json at all {{{", &dir);
     assert!(!out.trim().is_empty(), "must still render something");
     assert!(
-        out.contains("statusline-cli-garbage:"),
+        out.contains("statusline-cli-garbage"),
         "git line missing: {out}"
     );
     let _ = std::fs::remove_dir_all(&dir);
@@ -130,7 +134,7 @@ fn malformed_stdin_still_renders_rather_than_failing() {
 
 #[test]
 fn runs_outside_a_git_repo() {
-    let dir = std::env::temp_dir().join("statusline-cli-nogit");
+    let dir = std::env::temp_dir().join(format!("statusline-cli-nogit-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let out = run("{}", &dir);
