@@ -29,6 +29,33 @@ use std::time::Duration;
 /// network mount, ...) can't stall the statusline indefinitely.
 const GIT_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// Spawn `program` detached from our stdio, ignoring the result. Used only to
+/// terminate a stalled child, where there is nothing useful to do on failure.
+fn run_detached(program: &str, args: &[&str]) {
+    let _ = Command::new(program)
+        .args(args)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
+/// Terminate a stalled child by pid, using the platform's own tool so we stay
+/// dependency-free. `Child::kill()` is not reachable here — the waiter thread
+/// owns the `Child` — so the pid is signalled directly instead.
+#[cfg(unix)]
+fn terminate(pid: u32) {
+    run_detached("kill", &["-TERM", &pid.to_string()]);
+}
+
+/// `/T` also takes the process tree: `git` may have spawned a pager or helper.
+#[cfg(windows)]
+fn terminate(pid: u32) {
+    run_detached("taskkill", &["/PID", &pid.to_string(), "/T", "/F"]);
+}
+
+#[cfg(not(any(unix, windows)))]
+fn terminate(_pid: u32) {}
+
 /// Run `cmd` and return its output, or `None` if it doesn't finish within
 /// `timeout` (the child is signalled before we give up).
 ///
@@ -56,23 +83,25 @@ fn run_with_timeout(cmd: &mut Command, timeout: Duration) -> Option<Output> {
 
     let (tx, rx) = mpsc::channel();
     // 64 KiB stack: this thread only blocks on wait and sends the result.
-    thread::Builder::new()
+    if thread::Builder::new()
         .stack_size(64 * 1024)
         .spawn(move || {
             let _ = tx.send(child.wait_with_output());
         })
-        .ok()?;
+        .is_err()
+    {
+        // The closure (and with it the `Child`) is gone, so the only handle
+        // left is the pid. Signal it rather than abandoning a live git.
+        terminate(pid);
+        return None;
+    }
 
     match rx.recv_timeout(timeout) {
         Ok(Ok(out)) => Some(out),
         // Timed out or the wait itself failed. Signal the child so a stalled
         // git can't accumulate across renders (we run once every refresh).
         _ => {
-            let _ = Command::new("kill")
-                .args(["-TERM", &pid.to_string()])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
+            terminate(pid);
             None
         }
     }
@@ -175,6 +204,10 @@ fn diff_lines(cwd: Option<&str>) -> (u32, u32) {
 
 /// Sum the added/removed columns of `git diff --numstat` output. Binary files
 /// (columns of `-`) contribute zero.
+///
+/// Saturating: a generated-file commit can push a diff past `u32::MAX` lines,
+/// and a wrapped count (release) or a panic (debug) is worse than a pinned
+/// maximum in a status display.
 fn parse_numstat(text: &str) -> (u32, u32) {
     let mut added = 0u32;
     let mut removed = 0u32;
@@ -182,8 +215,8 @@ fn parse_numstat(text: &str) -> (u32, u32) {
         let mut cols = line.split('\t');
         let a = cols.next().unwrap_or("-");
         let r = cols.next().unwrap_or("-");
-        added += a.parse::<u32>().unwrap_or(0);
-        removed += r.parse::<u32>().unwrap_or(0);
+        added = added.saturating_add(a.parse::<u32>().unwrap_or(0));
+        removed = removed.saturating_add(r.parse::<u32>().unwrap_or(0));
     }
     (added, removed)
 }
@@ -329,6 +362,40 @@ u UU N... 1 2 3 100644 100644 100644 100644 ggg hhh iii conflict.rs
     #[test]
     fn not_a_status_returns_none() {
         assert!(parse_porcelain_v2("random text\n").is_none());
+    }
+
+    /// BP-001 regression: the timeout path must actually stop the child. The
+    /// fixture is Unix-only (`sleep`); the Windows `taskkill` branch is
+    /// compile-checked by CI's windows job but has no behavioural fixture here.
+    #[cfg(unix)]
+    #[test]
+    fn terminate_stops_a_running_child() {
+        let mut child = Command::new("sleep")
+            .arg("30")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let start = Instant::now();
+        terminate(child.id());
+        let status = child.wait().unwrap();
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "terminate must not wait the sleep out"
+        );
+        assert!(
+            !status.success(),
+            "a signalled child must not report success"
+        );
+    }
+
+    /// BP-017 regression: a diff larger than `u32::MAX` lines must pin at the
+    /// maximum, not wrap (release) or panic (debug).
+    #[test]
+    fn numstat_saturates_instead_of_overflowing() {
+        let huge = u32::MAX;
+        let out = format!("{huge}\t{huge}\tbig.txt\n{huge}\t{huge}\tbigger.txt\n");
+        assert_eq!(parse_numstat(&out), (u32::MAX, u32::MAX));
     }
 
     #[test]
