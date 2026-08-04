@@ -74,7 +74,12 @@ fn fixture(name: &str) -> std::path::PathBuf {
 #[test]
 fn renders_every_harness_field_end_to_end() {
     let dir = fixture("full");
-    let payload = CLAUDE_CODE_PAYLOAD.replace("PLACEHOLDER", dir.to_str().unwrap());
+    // Windows paths are backslash-separated and `\` is a JSON escape, so an
+    // unescaped path silently produces malformed JSON — the tool then falls
+    // back to a git-only render and every field assertion below fails for the
+    // wrong reason. Escape before substituting.
+    let path = dir.to_str().unwrap().replace('\\', "\\\\");
+    let payload = CLAUDE_CODE_PAYLOAD.replace("PLACEHOLDER", &path);
     let out = run(&payload, &dir);
 
     assert!(out.contains("fixture:"), "repo name missing: {out}");
